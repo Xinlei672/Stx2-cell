@@ -1,0 +1,334 @@
+library(Seurat)
+scStx2<- CreateSeuratObject(counts = scStx2, project = "Stx2", min.cells = 3, min.features = 200)
+head(scStx2@meta.data)
+scStx2@assays$RNA@counts[1:4,1:4]
+dim(scStx2)
+table(grepl("^MT-",rownames(scStx2)))
+scStx2[["percent.mt"]]<-PercentageFeatureSet(scStx2,pattern="^MT-")
+head(scStx2@meta.data)
+summary(scStx2@meta.data)
+pctMT=10 
+scStx2<-subset(scStx2,subset=percent.mt < pctMT)
+dim(scStx2)
+table(grepl("^ERCC-",rownames(scStx2)))
+scStx2[["percent.ERCC"]]<-PercentageFeatureSet(scStx2,pattern="^ERCC-")
+head(scStx2@meta.data)
+summary(scStx2@meta.data)
+rownames(scStx2)[grep("^ERCC-",rownames(scStx2))]
+#sum(renal_scRNA$percent.ERCC<40)
+sum(scStx2$percent.ERCC<10)
+pctERCC=10
+scStx2<-subset(scStx2,subset=percent.ERCC<pctERCC)
+dim(scStx2)
+
+FeatureScatter(scStx2,feature1 = "nCount_RNA", feature2 = "percent.mt")
+scStx2<-FindVariableFeatures(scStx2,selection.method = "vst",nfeatures = 1500)
+top50<-head(VariableFeatures(scStx2),50)
+top50
+print(VlnPlot(scStx2, features = c("nFeature_RNA", "nCount_RNA", "percent.mt","percent.ribo"), ncol = 3))
+
+print(FeatureScatter(scStx2, feature1 = "nCount_RNA", feature2 = "percent.mt"))
+
+print(FeatureScatter(scStx2, feature1 = "nCount_RNA", feature2 = "nFeature_RNA"))
+
+scStx2<- subset(scStx2, subset = nFeature_RNA > 200 & percent.mt < 10)
+print(dim(scStx2))
+
+scStx2 = NormalizeData(scStx2, normalization.method = "LogNormalize", scale.factor = 10000)
+scStx2<-ScaleData(scStx2,features = (rownames(scStx2)))
+GetAssayData(scStx2,slot = "scale.data",assay = "RNA")[1:8,1:4]
+GetAssayData(scStx2,slot = "counts",assay = "RNA")[1:8,1:4]
+scStx2 = RunPCA(scStx2,features = VariableFeatures(scStx2))
+scStx2 = RunTSNE(scStx2,features = VariableFeatures(scStx2),check_duplicates = FALSE)
+scSTX2 = RunUMAP(scStx2,features = VariableFeatures(scStx2))
+DimPlot(scStx2,reduction='pca')
+DimPlot(scSTX2,reduction='umap')
+DimPlot(scStx2,reduction='tsne')
+
+scStx2=JackStraw(scStx2,reduction='pca',dims = 20)
+scStx2=ScoreJackStraw(scStx2,dims = 1:20)
+JackStrawPlot(scStx2,dims = 1:20,reduction = "pca")
+ElbowPlot(scStx2,ndims = 20,reduction = "pca")
+
+scStx2<-FindNeighbors(scStx2,dims = 1:20)
+scStx2_1<-FindClusters(scStx2,resolution =0.6)
+table(scStx2_1@meta.data$seurat_clusters)
+
+#remove doublecell
+library(DoubletFinder)
+sweep.data<-paramSweep_v3(scStx2_1,PCs = 1:20)
+sweep.datas<-summarizeSweep(sweep.data,GT=FALSE)
+bcmvn=find.pK(sweep.datas)
+homotypic.prop=modelHomotypic(scStx2_1@meta.data$RNA_snn_res.0.6)
+nExp_poi=round(0.075*length(scStx2_1$orig.ident))
+nExp_poi.adj=round(nExp_poi*(1-homotypic.prop))
+scStx2_1=doubletFinder_v3(scStx2_1, PCs = 1:20, pN = 0.25, pK = as.numeric(as.character(bcmvn$pK[which.max(bcmvn$BCmetric)])),
+                        nExp = nExp_poi.adj, reuse.pANN = FALSE)
+scStx2_1@meta.data$DF_hi.lo<- scStx2_1@meta.data[,9]  
+object_ID<-"scStx2_1"
+pdf(paste0(object_ID,"_DoubletFinder.pdf"),width = 10,height = 10)
+P5<-DimPlot(scStx2_1, group.by ="DF_hi.lo",cols=c("black","gold","red"),reduction = "umap")
+P5
+table(scStx2_1@meta.data$DF_hi.lo)
+
+
+
+Doublet<-table(scStx2_1@meta.data$DF_hi.lo=="Doublet")
+scStx2_1@meta.data[,c(8,9)]=NULL   
+Idents(scStx2_1) <- "DF_hi.lo"    
+scStx2_1<-subset(x = scStx2_1, idents="Singlet")   
+dim(scStx2_1)
+Idents(scStx2_1) <- "orig.ident"
+
+DimPlot(scStx2_1,reduction='pca')
+DimPlot(scStx2_1,reduction='umap', group.by="seurat_clusters", label = T,
+        label.size =4 )
+DimPlot(scStx2_1,reduction='tsne')
+
+table(scStx2_1$orig.ident)
+Idents(scStx2_1) <- "seurat_clusters"
+scStx2_1<-NormalizeData(scStx2_1, normalization.method = "LogNormalize")
+GetAssayData(scStx2_1,slot = "data",assay = "RNA")[1:8,1:4]
+#if test.use id negbinom, possion or deseq2, slot will be set to counts
+diff.willcox= FindAllMarkers(scStx2_1)
+head(diff.willcox)
+dim(diff.willcox)
+library(tidyverse)
+all.makers=diff.willcox %>% select(gene, everything()) %>%
+  subset(p_val<0.05 & abs(diff.willcox$avg_log2FC)>0.5)
+#an adjusted pvalue <0.05 and |log 2[fold change(FC)]|0.5
+#were considered the 2 cutoff criteria for identifying maker genes
+dim(all.makers)
+summary(all.makers)
+top10_1= all.makers%>% group_by(cluster)%>%top_n(n=10,wt=avg_log2FC)
+top10_1
+top10_1=CaseMatch(search=as.vector(top10_1$gene),match = rownames(scStx2_1))
+top10_1
+length(top10)
+length(unique(sort(top10)))
+DoHeatmap(scStx2_1,features = top10,group.by="seurat_clusters")
+
+library(xlsx)
+markerdf3=read.xlsx("/home/shpc_101103/Stx2 单细胞测序/GENELIST.xlsx",sheetIndex = 1)
+markerdf3$GENE=as.character(markerdf3$GENE)
+DotPlot(scStx2_1, features = markerdf3$GENE)+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+col.num<-length(unique(a@meta.data$seurat_clusters))
+VlnPlot(a,
+        features=c("A4GALT"),
+        group.by="celltype",
+        cols=rainbow(col.num))
+scStx2_3<-scStx2_1
+scStx2_3$orig.ident<-scStx2_3$seurat_clusters
+table(Idents(scStx2_3))
+scStx2_3 <- RenameIdents(scStx2_3, `0` ="Monocyte", `1` = "Monocyte", `2` = "Neutrophil",
+                      `3` = "Neutrophil",`4` = "Monocyte", `5` = "Monocyte", 
+                      `6` = "Monocyte",`7` = "Monocyte", `8` = "NKT Cell", `9` = "Monocyte", 
+                      `10` = "Monocyte",`11` = "Monocyte",'12'="Mast cell")
+
+scStx2_3 <- StashIdent(scStx2_3, save.name = 'orig.ident')
+DimPlot(scStx2_3,reduction = 'umap')
+scStx2_3@meta.data$celltype=scStx2_3@meta.data$orig.ident
+scStx2_3$celltype=factor(scStx2_3$celltype,levels = sort(unique(scStx2_3$celltype)))
+Idents(scStx2_3)="celltype"
+DotPlot(scStx2_3, features = markerdf3$GENE)+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+
+FeaturePlot(a,'S100A9')
+FeaturePlot(scSTX2,c('CD14','CXCR9'),blend = T)
+
+library(dplyr)
+mydata <- a@reductions$umap@cell.embeddings
+myexpr <- as.data.frame(a@assays$RNA@data)[c('CD14','CCR3'),]%>% 
+  t()
+mydata <- cbind(mydata,myexpr) %>% as.data.frame()
+head(mydata)
+library(ggplot2)
+#BiocManager::install("ggnewscale")
+library(ggnewscale)
+ggplot(mydata,aes(x=UMAP_1,y=UMAP_2))+
+  geom_point(data = mydata,aes(x=UMAP_1,y=UMAP_2,
+                               color=CD14),size=1)+
+  scale_color_gradient('CD14',low = alpha('grey',0.1),
+                       high = alpha('#000080',1))+
+  new_scale('color')+
+  geom_point(data = mydata,aes(x=UMAP_1,y=UMAP_2,
+                               color=CCR3),size=1)+
+  scale_color_gradient('CCR3',low = alpha('grey',0.1),
+                       high = alpha('red',1))+
+  theme_bw()+
+  theme(panel.grid=element_blank())+
+  theme(panel.border = element_rect(fill=NA,color="black", size=1, linetype="solid"))#边框调节
+
+###10/21/2023 code
+a<-readRDS("stx2/scStx2_3")
+table(Idents(a))
+idents(a)<-a@meta.data$celltype
+DimPlot(a,reduction = 'umap')
+levels(a)<-c("NKT Cell","Monocyte","Neutrophil","Mast cell")
+table(a@meta.data$celltype)
+DotPlot(a, features = c("CD3D","CD3E","CD8A","KLRD1","CCL5","NKG7","CST3","CD14","LYZ","CXCR2","S100A9","S100A8","CCR3","CPA3"))+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+DotPlot(a, features = c("S100A9","S100A8"))+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+
+a$orig.ident<-a$seurat_clusters
+Idents(a)<-a@meta.data$seurat_clusters
+table(Idents(a))
+a <- RenameIdents(a, `0` ="Monocyte", `1` = "Monocyte", `2` = "Neutrophil",
+                         `3` = "Neutrophil",`4` = "Monocyte", `5` = "Monocyte", 
+                         `6` = "Monocyte",`7` = "Monocyte", `8` = "NKT Cell", `9` = "Monocyte", 
+                         `10` = "Monocyte",`11` = "Monocyte",'12'="Mast Cell")
+
+a@meta.data$celltype_1=a@meta.data$orig.ident
+levels(a)<-c("Mast Cell","NKT Cell","Neutrophil","Monocyte")
+DotPlot(a, features = c("CD3D","CD3E","CD8A","KLRD1","CCL5","NKG7","CST3","CD14","LYZ","CXCR2","S100A9","S100A8","CCR3","CPA3"))+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+DotPlot(a, features = c("CST3","CD14","LYZ","CXCR2","S100A9","S100A8","CD3D","CD3E","CD8A","KLRD1","CCL5","NKG7","CD19","MS4A1","CD79A","CCR3","CPA3"))+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")+theme(axis.text.x = element_text(size = 13, angle = 60, face = "italic"))
+Idents(a)<-a@meta.data$seurat_clusters
+DotPlot(a, features = c("CST3","CD14","LYZ","CXCR2","S100A9","S100A8","CD3D","CD3E","CD8A","KLRD1","CCL5","NKG7","CD19","MS4A1","CD79A","CCR3","CPA3"))+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")+theme(axis.text.x = element_text(size = 13, angle = 60, face = "italic"))
+FeaturePlot(a,'CD4')
+
+
+install.packages("tidydr")
+library(tidydr)
+library(ggplot2)
+data <- as.data.frame(a[["umap"]]@cell.embeddings)
+data$celltype <- a$celltype
+colnames(data)
+ggplot(data, aes(x = UMAP_1, 
+                 y = UMAP_2, 
+                 fill = celltype,
+                 color = celltype),label = T) +
+  geom_point(size = 1) +
+  theme_dr()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+data1 <- as.data.frame(a[["umap"]]@cell.embeddings)
+data1$cluster <- a$celltype_1
+colnames(data1)
+ggplot(data1, aes(x = UMAP_1, 
+                 y = UMAP_2, 
+                 fill = cluster,
+                 color = cluster),label = T) +
+  geom_point(size = 2) +
+  theme_dr()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  theme(text = element_text(size = 15))
+
+
+FeaturePlot(scStx2,'TLR4')
+FeaturePlot(object = scStx2, features = c('CD14'),
+            cols = c("lightgrey" ,"#000080"),slot = "data",label.size = 2,pt.size = 0.6)+ 
+ theme(axis.line = element_blank(), axis.text = element_blank(), axis.ticks = element_blank(), 
+        axis.title = element_blank()) + guides(color=F)
+library(dplyr)
+mydata <- scStx2@reductions$umap@cell.embeddings
+myexpr <- as.data.frame(scStx2@assays$RNA@data)[c('CD14','CCR2'),]%>% 
+  t()
+mydata <- cbind(mydata,myexpr) %>% as.data.frame()
+head(mydata)
+library(ggplot2)
+#BiocManager::install("ggnewscale")
+library(ggnewscale)
+# ggplot(mydata,aes(x=UMAP_1,y=UMAP_2))+
+#   geom_point(data = mydata,aes(x=UMAP_1,y=UMAP_2,
+#                                color=CD14),size=1)+
+#   scale_color_gradient('CD14',low = alpha('grey',0.1),
+#                        high = alpha('#000080',1))+
+#   new_scale('color')+
+#   geom_point(data = mydata,aes(x=UMAP_1,y=UMAP_2,
+#                                color=CCR2),size=1)+
+#   scale_color_gradient('CCR2',low = alpha('grey',0.1),
+#                        high = alpha('red',1))+
+#   theme_bw()+
+#   theme(panel.grid=element_blank())+
+#   theme(panel.border = element_rect(fill=NA,color="black", size=1, linetype="solid"))
+
+ggplot(mydata,aes(x=UMAP_1,y=UMAP_2))+
+  geom_point(data = mydata,aes(x=UMAP_1,y=UMAP_2,
+                               color=CD14),size=1)+
+  scale_color_gradient('CD14',low = alpha('lightgrey',0.1),
+                       high = alpha('#000080',1))+
+  new_scale('color')+
+  geom_point(data = mydata,aes(x=UMAP_1,y=UMAP_2,
+                               color=CCR2),size=1)+
+  scale_color_gradient('CCR2',low = alpha('lightgrey',0.1),
+                       high = alpha('#DE1F1F',1))+
+  theme_bw()+
+  theme(panel.grid=element_blank())+
+  theme(axis.line = element_blank(), axis.text = element_blank(), axis.ticks = element_blank(), 
+        axis.title = element_blank()) +
+  theme(panel.border = element_rect(fill=NA,color="black", size=0, linetype="solid"))
+
+
+exprset<-scStx2@assays[["RNA"]]@data
+exprset<-as.data.frame(t(as.matrix(exprset)))
+y<-as.numeric(exprset[,"CD14"])
+colnames<-colnames(exprset)
+cor_data_df<-data.frame(colnames)
+for(i in 1:length(colnames)){
+  test <-cor.test(as.numeric(exprset[,i]),y,type="spearman")
+  cor_data_df[i,2]<-test$estimate
+  cor_data_df[i,3]<-test$p.value
+}
+names(cor_data_df)<-c("symbol", "correlation", "pvalue")
+library(dplyr)
+library(tidyr)
+cor_data_sig_pos<-cor_data_df %>%
+  filter(pvalue <0.01) %>% filter(correlation > 0)%>%
+  arrange(desc(correlation))
+cor_data_sig_neg<-cor_data_df %>%
+  filter(pvalue <0.01) %>% filter(correlation <0)%>%
+  arrange(abs(correlation))
+
+library(ggstatsplot)
+ggscatterstats(data=exprset,
+               y= CD14,
+               x= CCR2,
+               centrality.para ="mean",
+               margins="both",
+               xfill="#CC79A7",
+               yfill="#009E73",
+               marginal.type="densigram",
+               title ="Relationship between CD14 and CCR2")
+
+FeatureScatter(scStx2, feature1="CD14", feature2="CCR2")
+
+select_gene<-subset(exprset, select = c("CD14","CCR2","CCR1","CCR3","CCR4","CCR5","CCR7",
+                                  "CCR9","CCR10"))
+class(select_gene)
+library(corrplot)
+sxl<-cor (select_gene, method="pearson")
+corrplot(sxl)
+corrplot(sxl, method = "ellipse", 
+         type = "upper",
+         tl.col = "black", tl.cex = 1.2, tl.srt = 45
+)
+，method = "ellipse", type = "upper"
+corrplot(sxl, method = "ellipse", type = "upper",
+         tl.col = "black", tl.cex = 0.8, tl.srt = 45,tl.pos = "lt")
+corrplot(sxl, method = "number", type = "lower",
+         tl.col = "n", tl.cex = 0.8, tl.pos = "n",
+         add = T)
+addcol <- colorRampPalette(c("red", "white", "blue"))
+corrplot(sxl, method = "pie", type = "upper",col = addcol(100), 
+         tl.col = "black", tl.cex = 0.8, tl.srt = 45,
+         tl.pos = "lt")
+corrplot(sxl, method = "number", type = "lower",col = addcol(100), 
+         tl.col = "n", tl.cex = 0.8, tl.pos = "n",
+         add = T)
+testRes = cor.mtest(select_gene, method="pearson",conf.level = 0.95)
+corrplot(sxl, method = "color", col = addcol(100), 
+         tl.col = "black", tl.cex = 0.8, tl.srt = 45,tl.pos = "lt",
+         p.mat = testRes$p, diag = T, type = 'upper',
+         sig.level = c(0.001, 0.01, 0.05), pch.cex = 1.2,
+         insig = 'label_sig', pch.col = 'grey20', order = 'AOE')
+corrplot(sxl, method = "number", type = "lower",col = addcol(100), 
+         tl.col = "n", tl.cex = 0.8, tl.srt = 45, tl.pos = "n",order = 'AOE',
+         add = T)
+
