@@ -1,0 +1,22 @@
+rm(list = ls())
+ccl<-read.table("ccltotal/ccl",sep = "\t",check.names = F,header = T,
+                row.names = 1,dec = ".",comment.char = "",quote = "")
+library(pheatmap)
+BiocManager::install("pheatmap")
+library(vegan)
+BiocManager::install("vegan")
+data <- as.data.frame(ccl)
+pheatmap(data) 
+data.1 <- decostand(data,"standardize",MARGIN = 1)
+#data.1 <- as.data.frame(scale(data))
+View(data.1)
+apply(data.1,1,sd) 
+pheatmap(data.1)
+pheatmap(data.1, clustering_method = "mcquitty")
+pheatmap(data.1,clustering_distance_rows = "correlation",
+         clustering_distance_cols= "correlation" )
+
+pheatmap(data.1,
+         treeheight_row=100,treeheight_col=50) 
+pheatmap(data.1, clustering_distance_rows = "correlation",
+         clustering_distance_cols= "correlation",color = colorRampPalette(c("navy", "white", "firebrick3"))(50))
